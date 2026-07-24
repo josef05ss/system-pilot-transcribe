@@ -98,86 +98,23 @@ def prepare_job(self, job_id: str) -> dict:
                     cleanup_directory(work_dir)
                 return {"cancelled": True}
 
-                update_job(job_id, status="CHUNKING", progress=15)
-
-            audio_size_mb = (
-                audio_path.stat().st_size / (1024 * 1024)
+            update_job(job_id, status="CHUNKING", progress=15)
+            plans = create_chunks(
+                audio_path,
+                chunks_dir,
+                job.chunk_seconds,
+                job.overlap_seconds,
+                output_format=audio_extension,
             )
+            if not plans:
+                raise RuntimeError("No se pudieron generar chunks de audio")
 
-            use_single_together_request = (
-                job.provider_name == "together"
-                and clip_duration
-                <= settings.together_single_request_max_seconds
-                and audio_size_mb
-                <= settings.together_single_request_max_mb
-            )
-
-            if use_single_together_request:
-                # Para intervalos normales se envía el FLAC completo
-                # en una sola solicitud a Together.
-                manifest = [
-                    {
-                        "index": 0,
-                        "start_seconds": 0.0,
-                        "duration_seconds": float(clip_duration),
-                        "path": str(audio_path.resolve()),
-                    }
-                ]
-                chunk_strategy = "together_single_request"
-
-            else:
-                # Together utiliza chunks largos.
-                # El proveedor local conserva sus chunks configurables.
-                chunk_seconds = (
-                    settings.together_chunk_seconds
-                    if job.provider_name == "together"
-                    else job.chunk_seconds
-                )
-
-                overlap_seconds = (
-                    settings.together_chunk_overlap_seconds
-                    if job.provider_name == "together"
-                    else job.overlap_seconds
-                )
-
-                plans = create_chunks(
-                    audio_path,
-                    chunks_dir,
-                    chunk_seconds,
-                    overlap_seconds,
-                    output_format=audio_extension,
-                )
-
-                if not plans:
-                    raise RuntimeError(
-                        "No se pudieron generar chunks de audio"
-                    )
-
-                manifest = [
-                    plan.as_dict()
-                    for plan in plans
-                ]
-
-                chunk_strategy = (
-                    "together_adaptive_chunks"
-                    if job.provider_name == "together"
-                    else "local_chunks"
-                )
-
-            job.chunk_manifest = manifest
-            job.total_chunks = len(manifest)
+            job.chunk_manifest = [plan.as_dict() for plan in plans]
+            job.total_chunks = len(plans)
             job.completed_chunks = 0
-
-            job.metrics = {
-                "chunk_strategy": chunk_strategy,
-                "prepared_audio_mb": round(audio_size_mb, 3),
-                "selected_interval_seconds": clip_duration,
-            }
-
             job.status = "QUEUED_TRANSCRIPTION"
             job.progress = 20
             db.commit()
-
             priority = job.priority
 
         transcribe_job.apply_async(
@@ -185,11 +122,7 @@ def prepare_job(self, job_id: str) -> dict:
             queue="transcription",
             priority=priority,
         )
-        return {
-            "job_id": job_id,
-            "chunks": len(manifest),
-            "strategy": chunk_strategy,
-        }
+        return {"job_id": job_id, "chunks": len(plans)}
 
     except Exception as exc:
         update_job(
@@ -270,17 +203,6 @@ def transcribe_job(self, job_id: str) -> dict:
                     if absolute_end <= last_segment_end + 0.05:
                         continue
                     last_segment_end = max(last_segment_end, absolute_end)
-                    speaker_label = segment.get("speaker_label")
-
-                    if (
-                        job.provider_name == "together"
-                        and len(manifest) > 1
-                        and speaker_label
-                    ):
-                        speaker_label = (
-                            f"CHUNK_{index + 1:02d}_"
-                            f"{speaker_label}"
-                        )
                     db.add(
                         TranscriptSegment(
                             job_id=job.id,
@@ -290,7 +212,7 @@ def transcribe_job(self, job_id: str) -> dict:
                             text=segment["text"],
                             avg_logprob=segment.get("avg_logprob"),
                             no_speech_prob=segment.get("no_speech_prob"),
-                            speaker_label=speaker_label,
+                            speaker_label=segment.get("speaker_label"),
                         )
                     )
 
@@ -312,9 +234,7 @@ def transcribe_job(self, job_id: str) -> dict:
             job.real_time_factor = rtf
             job.device_used = runtime.device if runtime else None
             job.compute_type_used = runtime.compute_type if runtime else None
-            preparation_metrics = dict(job.metrics or {})
             job.metrics = {
-                **preparation_metrics,
                 "provider": job.provider_name,
                 "provider_model": provider_model,
                 "language_probability": language_probability,

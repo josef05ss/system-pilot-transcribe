@@ -1,8 +1,52 @@
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+# Conserva abiertos los directorios de DLL durante toda la ejecución.
+_DLL_DIRECTORY_HANDLES: list[object] = []
+
+if os.name == "nt":
+    # En Windows, la ubicación real de los paquetes del entorno virtual.
+    site_packages = Path(sys.prefix) / "Lib" / "site-packages"
+
+    cuda_root = Path(
+        os.environ.get(
+            "CUDA_PATH",
+            r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6",
+        )
+    )
+
+    dll_directories = [
+        cuda_root / "bin",
+        site_packages / "nvidia" / "cublas" / "bin",
+        site_packages / "nvidia" / "cudnn" / "bin",
+        site_packages / "ctranslate2",
+    ]
+
+    for dll_directory in dll_directories:
+        if dll_directory.is_dir():
+            directory_text = str(dll_directory)
+
+            os.environ["PATH"] = (
+                directory_text
+                + os.pathsep
+                + os.environ.get("PATH", "")
+            )
+
+            _DLL_DIRECTORY_HANDLES.append(
+                os.add_dll_directory(directory_text)
+            )
+
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from threading import Lock
+
+import ctranslate2
+from faster_whisper import BatchedInferencePipeline, WhisperModel
+import re
+from dataclasses import dataclass
 from threading import Lock
 
 import ctranslate2

@@ -141,41 +141,19 @@ def build_chunk_ranges(
 ) -> list[tuple[float, float]]:
     if duration_seconds <= 0:
         return []
-
-    if (
-        chunk_seconds <= 0
-        or overlap_seconds < 0
-        or overlap_seconds >= chunk_seconds
-    ):
+    if chunk_seconds <= 0 or overlap_seconds < 0 or overlap_seconds >= chunk_seconds:
         raise ValueError("Configuración de chunks inválida")
 
+    step = chunk_seconds - overlap_seconds
+    total = max(1, math.ceil(max(0.0, duration_seconds - overlap_seconds) / step))
     ranges: list[tuple[float, float]] = []
-    start = 0.0
 
-    # Evita generar un último chunk de unos pocos segundos.
-    minimum_tail_seconds = max(
-        30.0,
-        float(overlap_seconds) * 2,
-    )
-
-    while start < duration_seconds:
-        length = min(
-            float(chunk_seconds),
-            duration_seconds - start,
-        )
-
-        remaining_after_chunk = duration_seconds - (start + length)
-
-        # Une una cola muy pequeña al chunk anterior.
-        if 0 < remaining_after_chunk <= minimum_tail_seconds:
-            length = duration_seconds - start
-
-        ranges.append((start, length))
-
-        if start + length >= duration_seconds:
+    for index in range(total):
+        start = index * step
+        if start >= duration_seconds:
             break
-
-        start += float(chunk_seconds - overlap_seconds)
+        length = min(chunk_seconds, duration_seconds - start)
+        ranges.append((float(start), float(length)))
 
     return ranges
 

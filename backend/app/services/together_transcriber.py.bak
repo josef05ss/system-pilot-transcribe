@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import time
 from pathlib import Path
 
 import httpx
@@ -82,83 +83,44 @@ def transcribe_chunk_together(
         pool=30.0,
     )
 
-    try:
-        with audio_path.open("rb") as audio_file:
-            multipart: list[tuple[str, tuple]] = [*fields]
+    last_error: Exception | None = None
+    for attempt in range(settings.together_max_retries + 1):
+        try:
+            with audio_path.open("rb") as audio_file:
+                multipart: list[tuple[str, tuple]] = [*fields]
+                # El campo model se envía antes que file, como recomienda Together.
+                multipart.append(("file", (audio_path.name, audio_file, mime)))
+                with httpx.Client(timeout=timeout) as client:
+                    response = client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {settings.together_api_key}"},
+                        files=multipart,
+                    )
 
-            # El modelo se envía antes del archivo.
-            multipart.append(
-                (
-                    "file",
-                    (
-                        audio_path.name,
-                        audio_file,
-                        mime,
-                    ),
-                )
-            )
-
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(
-                    url,
-                    headers={
-                        "Authorization": (
-                            f"Bearer {settings.together_api_key}"
-                        )
-                    },
-                    files=multipart,
+            if response.status_code == 429 or response.status_code >= 500:
+                detail = _error_detail(response)
+                if attempt < settings.together_max_retries:
+                    time.sleep(min(30, 2**attempt))
+                    continue
+                raise TogetherTranscriptionError(
+                    f"Together AI respondió {response.status_code}: {detail}"
                 )
 
-    except (httpx.HTTPError, OSError) as exc:
-        raise TogetherTranscriptionError(
-            "No se pudo consultar Together AI. "
-            "No se reintentó automáticamente para evitar "
-            f"un posible consumo duplicado: {exc}"
-        ) from exc
+            if response.status_code >= 400:
+                raise TogetherTranscriptionError(
+                    f"Together AI respondió {response.status_code}: {_error_detail(response)}"
+                )
 
-    request_id = (
-        response.headers.get("x-request-id")
-        or response.headers.get("cf-ray")
-        or "sin-id"
-    )
-
-    if response.status_code == 503:
-        raise TogetherTranscriptionError(
-            "Together AI respondió 503 por capacidad temporal "
-            "del servicio. No se reintentó automáticamente "
-            "para evitar consumo duplicado. "
-            f"request_id={request_id}"
-        )
-
-    if response.status_code == 429:
-        retry_after = (
-            response.headers.get("x-ratelimit-reset")
-            or "no indicado"
-        )
-
-        raise TogetherTranscriptionError(
-            "Together AI respondió 429 por límite dinámico. "
-            "No se reintentó automáticamente. "
-            f"retry_after={retry_after}; "
-            f"request_id={request_id}"
-        )
-
-    if response.status_code >= 400:
-        raise TogetherTranscriptionError(
-            f"Together AI respondió {response.status_code}: "
-            f"{_error_detail(response)}; "
-            f"request_id={request_id}"
-        )
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise TogetherTranscriptionError(
-            "Together AI devolvió una respuesta no JSON; "
-            f"request_id={request_id}"
-        ) from exc
-
-    
+            payload = response.json()
+            break
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            last_error = exc
+            if attempt < settings.together_max_retries:
+                time.sleep(min(30, 2**attempt))
+                continue
+            raise TogetherTranscriptionError(f"No se pudo consultar Together AI: {exc}") from exc
+    else:
+        raise TogetherTranscriptionError(f"No se pudo consultar Together AI: {last_error}")
 
     raw_segments = (
         payload.get("speaker_segments")
