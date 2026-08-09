@@ -1,0 +1,28 @@
+C4Container
+    title Diagrama de Contenedores - Sistema de Transcripción Híbrido v4
+
+    Person(admin, "Administrador", "Gestiona sedes, profesores, cursos y realiza transcripciones.")
+    
+    System_Ext(together, "Together AI API", "Proveedor de IA opcional (Fallback) para transcripción (Whisper Large v3).")
+    System_Ext(gpu, "Local GPU (NVIDIA RTX 3060)", "Hardware local para inferencia con Faster-Whisper.")
+
+    Container_Boundary(c1, "Sistema Híbrido v4") {
+        Container(frontend, "Frontend", "Next.js, TypeScript, React", "Interfaz de usuario para CRUDs, subida de grabaciones, y editor de transcripción.")
+        Container(celery, "Celery Workers", "Python, Celery", "Workers que ejecutan FFmpeg y la transcripción pesada en segundo plano.")
+        Container(storage, "File Storage Local", "Volúmenes", "Almacena videos subidos (uploads), trabajos en curso (work) y resultados (results).")
+        Container(redis, "Cola de Mensajes", "Redis", "Gestiona las colas de trabajos asíncronos.")
+        Container(backend, "Backend API", "FastAPI, Python", "Maneja la lógica de negocio, autenticación (futura) y gestión de trabajos.")
+        ContainerDb(db, "Base de Datos Relacional", "PostgreSQL", "Almacena datos operativos, configuraciones de aula y metadatos de transcripción.")
+    }
+
+    Rel(admin, frontend, "Usa", "Navegador Web")
+    Rel(frontend, backend, "Solicita CRUD y trabajos", "REST API (JSON)")
+    Rel(frontend, storage, "Sube/Descarga archivos", "HTTP (Multipart)")
+    Rel(backend, db, "Lee y Escribe datos", "SQLAlchemy ORM")
+    Rel(backend, redis, "Encola tareas de transcripción", "Celery Protocol")
+    Rel(celery, redis, "Consume tareas", "Celery Protocol")
+    Rel(celery, db, "Actualiza estados y guarda segmentos", "SQLAlchemy ORM")
+    Rel(celery, storage, "Lee video, extrae audio y guarda chunks", "File System")
+    
+    Rel(celery, gpu, "Inferencia local", "CUDA")
+    Rel(celery, together, "Inferencia remota (si activo)", "HTTPS API")
