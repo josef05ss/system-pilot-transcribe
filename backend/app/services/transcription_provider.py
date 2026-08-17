@@ -16,6 +16,8 @@ def transcribe_with_provider(
     language: str,
     vocabulary: list[str],
     previous_context: str = "",
+    *,
+    diarize_override: bool | None = None,
 ) -> dict:
     if provider_name == "local":
         result = transcribe_chunk_local(
@@ -34,6 +36,9 @@ def transcribe_with_provider(
             language,
             vocabulary,
             previous_context=previous_context,
+            diarize_override=diarize_override,
         )
 
-    raise ValueError(f"Proveedor de transcripción no soportado: {provider_name}")
+    raise ValueError(
+        f"Proveedor de transcripción no soportado: {provider_name}"
+    )

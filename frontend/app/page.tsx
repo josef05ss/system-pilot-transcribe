@@ -2,6 +2,8 @@
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import ClippedVideoPlayer from "./components/ClippedVideoPlayer";
+
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 type Site = { id: string; code: string; name: string; address?: string; active: boolean };
@@ -13,8 +15,31 @@ type Course = { id: string; code: string; name: string; description?: string; vo
 type Schedule = { id: string; professor_id: string; course_id: string; classroom_id: string; day_of_week: number; start_time: string; end_time: string; valid_from?: string; valid_until?: string; active: boolean };
 type Catalogs = { sites: Site[]; classrooms: Classroom[]; cameras: Camera[]; assignments: Assignment[]; professors: Professor[]; courses: Course[]; schedules: Schedule[] };
 type Recording = { id: string; site_id: string; classroom_id: string; camera_id: string; original_name: string; recording_started_at: string; duration_seconds: number; container_format?: string; video_codec?: string; audio_codec?: string; audio_sample_rate?: number; audio_channels?: number; file_size_bytes: number };
-type Job = { id: string; recording_id: string; schedule_id?: string; professor_id?: string; course_id?: string; requested_by: string; class_started_at: string; class_ended_at: string; status: string; progress: number; provider_name: string; model_name: string; total_chunks: number; completed_chunks: number; processing_seconds?: number; real_time_factor?: number; device_used?: string; compute_type_used?: string; error_message?: string; queue_position?: number; created_at: string };
+type Job = { id: string; recording_id: string; schedule_id?: string; professor_id?: string; course_id?: string; requested_by: string; class_started_at: string; class_ended_at: string; offset_start_seconds: number; offset_end_seconds: number; status: string; progress: number; provider_name: string; model_name: string; total_chunks: number; completed_chunks: number; processing_seconds?: number; real_time_factor?: number; device_used?: string; compute_type_used?: string; error_message?: string; queue_position?: number; created_at: string };
 type Transcript = { job_id: string; status: string; automatic_text?: string; reviewed_text?: string; final_text?: string; metrics: Record<string, unknown>; segments: Array<{ id: string; start_seconds: number; end_seconds: number; text: string; speaker_label?: string }> };
+
+type DeadTimeInterval = {
+  start_seconds: number;
+  end_seconds: number;
+  duration_seconds: number;
+  start_time?: string;
+  end_time?: string;
+  relative_start_seconds?: number;
+  relative_end_seconds?: number;
+  relative_start_time?: string;
+  relative_end_time?: string;
+  source_start_seconds?: number;
+  source_end_seconds?: number;
+  source_start_time?: string;
+  source_end_time?: string;
+  level?: string;
+};
+
+type DeadTimeAnalysisMeta = {
+  reliable?: boolean;
+  suppressed_interval_count?: number;
+  suppression_reason?: string | null;
+};
 type SystemInfo = { configured_device: string; configured_model: string; transcription_provider: "local" | "together"; together_ready: boolean; cuda_devices: number; gpus: Array<{ index: number; name: string; memory_mb: number; utilization_percent: number }> };
 
 type View = "transcribe" | "settings" | "jobs";
@@ -31,6 +56,22 @@ function formatDuration(value?: number): string {
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatPreciseTime(value?: number): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  const safe = Math.max(0, value);
+  const whole = Math.floor(safe);
+  const milliseconds = Math.round((safe - whole) * 1000);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const seconds = whole % 60;
+  const base = `${minutes.toString().padStart(2, "0")}:${seconds
+    .toString()
+    .padStart(2, "0")}.${milliseconds.toString().padStart(3, "0")}`;
+  return hours > 0
+    ? `${hours.toString().padStart(2, "0")}:${base}`
+    : base;
 }
 
 function formatBytes(bytes: number): string {
@@ -109,6 +150,7 @@ export default function Dashboard() {
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [reviewText, setReviewText] = useState("");
+  const [resultSeekSeconds, setResultSeekSeconds] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const [siteForm, setSiteForm] = useState({ id: "", code: "", name: "", address: "" });
@@ -125,6 +167,34 @@ export default function Dashboard() {
   const uploadCameras = useMemo(() => catalogs.cameras.filter((x) => x.active && x.classroom_id === classroomId), [catalogs.cameras, classroomId]);
   const selectedRecording = useMemo(() => recordings.find((x) => x.id === recordingId), [recordings, recordingId]);
   const recordingSchedules = useMemo(() => catalogs.schedules.filter((x) => x.active && (!selectedRecording || x.classroom_id === selectedRecording.classroom_id)), [catalogs.schedules, selectedRecording]);
+  const selectedJobRecording = useMemo(
+    () => recordings.find((recording) => recording.id === selectedJob?.recording_id),
+    [recordings, selectedJob],
+  );
+  const deadTimeIntervals = useMemo<DeadTimeInterval[]>(() => {
+    const analysis = transcript?.metrics?.dead_time_analysis;
+    if (!analysis || typeof analysis !== "object") return [];
+
+    const intervals = (analysis as { intervals?: unknown }).intervals;
+    if (!Array.isArray(intervals)) return [];
+
+    return intervals.filter((item): item is DeadTimeInterval => {
+      if (!item || typeof item !== "object") return false;
+      const candidate = item as Partial<DeadTimeInterval>;
+      return (
+        typeof candidate.start_seconds === "number" &&
+        typeof candidate.end_seconds === "number" &&
+        typeof candidate.duration_seconds === "number"
+      );
+    });
+  }, [transcript]);
+
+  const deadTimeAnalysisMeta = useMemo<DeadTimeAnalysisMeta>(() => {
+    const analysis = transcript?.metrics?.dead_time_analysis;
+    return analysis && typeof analysis === "object"
+      ? (analysis as DeadTimeAnalysisMeta)
+      : {};
+  }, [transcript]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -231,6 +301,11 @@ export default function Dashboard() {
     finally { setBusy(false); }
   }
 
+  function seekToDeadTime(relativeSeconds: number) {
+    // Inicia tres segundos antes para que el administrador escuche el contexto.
+    setResultSeekSeconds(Math.max(0, relativeSeconds - 3));
+  }
+
   async function saveReview(approve: boolean) {
     if (!selectedJob || !reviewText.trim()) return;
     setBusy(true);
@@ -335,9 +410,205 @@ export default function Dashboard() {
           </div>
         )}
 
-        {view === "jobs" && <div className="jobs-layout"><div className="card"><div className="card-title simple"><div><h2>Solicitudes recientes</h2><p>Con una GPU se procesan por turno; con más GPU se agregan workers.</p></div></div><div className="job-list">{jobs.map((job)=><button key={job.id} className={`job ${selectedJob?.id===job.id?"selected":""}`} onClick={()=>{setSelectedJob(job);setTranscript(null);}}><div><strong>{job.requested_by}</strong><span>{new Date(job.created_at).toLocaleString()}</span></div><b>{statusLabel[job.status]||job.status}</b><div className="progress"><i style={{width:`${job.progress}%`}}/></div><small>{job.provider_name} · {job.model_name} · {job.completed_chunks}/{job.total_chunks||"—"} chunks {job.queue_position?`· cola #${job.queue_position}`:""}</small>{job.error_message&&<em>{job.error_message}</em>}</button>)}</div></div><div className="card result-card">{selectedJob?<><div className="card-title simple"><div><h2>Trabajo {selectedJob.id.slice(0,8)}</h2><p>{statusLabel[selectedJob.status]||selectedJob.status}</p></div><div className="download"><a href={`${API}/api/jobs/${selectedJob.id}/download?file_format=txt`}>TXT</a><a href={`${API}/api/jobs/${selectedJob.id}/download?file_format=json`}>JSON</a></div></div><div className="metrics"><div><span>Proveedor</span><strong>{selectedJob.provider_name}</strong></div><div><span>Dispositivo</span><strong>{selectedJob.device_used||"Pendiente"}</strong></div><div><span>RTF</span><strong>{selectedJob.real_time_factor?.toFixed(3)||"—"}</strong></div><div><span>Progreso</span><strong>{selectedJob.progress}%</strong></div></div>{["READY_FOR_REVIEW","APPROVED"].includes(selectedJob.status)?<><textarea className="transcript" value={reviewText} onChange={(e)=>setReviewText(e.target.value)} placeholder="Cargando texto..."/><div className="inline-actions"><button className="outline" onClick={()=>saveReview(false)}>Guardar revisión</button><button className="primary" onClick={()=>saveReview(true)}>Aprobar</button></div></>:<div className="processing"><div className="spinner"/><strong>{statusLabel[selectedJob.status]||selectedJob.status}</strong><p>Los workers continúan aunque cierres el navegador.</p></div>}</>:<div className="empty">Selecciona un trabajo para ver su resultado.</div>}</div></div>}
+        {view === "jobs" && (
+          <div className="jobs-layout">
+            <div className="card">
+              <div className="card-title simple">
+                <div>
+                  <h2>Solicitudes recientes</h2>
+                  <p>Con una GPU se procesan por turno; con más GPU se agregan workers.</p>
+                </div>
+              </div>
 
-        <footer className="statusbar"><span className="status-dot" />{message}</footer>
+              <div className="job-list">
+                {jobs.map((job) => (
+                  <button
+                    key={job.id}
+                    className={`job ${selectedJob?.id === job.id ? "selected" : ""}`}
+                    onClick={() => {
+                      setSelectedJob(job);
+                      setTranscript(null);
+                      setResultSeekSeconds(null);
+                    }}
+                  >
+                    <div>
+                      <strong>{job.requested_by}</strong>
+                      <span>{new Date(job.created_at).toLocaleString()}</span>
+                    </div>
+                    <b>{statusLabel[job.status] || job.status}</b>
+                    <div className="progress">
+                      <i style={{ width: `${job.progress}%` }} />
+                    </div>
+                    <small>
+                      {job.provider_name} · {job.model_name} · {job.completed_chunks}/
+                      {job.total_chunks || "—"} chunks
+                      {job.queue_position ? ` · cola #${job.queue_position}` : ""}
+                    </small>
+                    {job.error_message && <em>{job.error_message}</em>}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="card result-card">
+              {selectedJob ? (
+                <>
+                  <div className="card-title simple">
+                    <div>
+                      <h2>Trabajo {selectedJob.id.slice(0, 8)}</h2>
+                      <p>{statusLabel[selectedJob.status] || selectedJob.status}</p>
+                    </div>
+                    <div className="download">
+                      <a href={`${API}/api/jobs/${selectedJob.id}/download?file_format=txt`}>TXT</a>
+                      <a href={`${API}/api/jobs/${selectedJob.id}/download?file_format=json`}>JSON</a>
+                    </div>
+                  </div>
+
+                  <div className="metrics">
+                    <div><span>Proveedor</span><strong>{selectedJob.provider_name}</strong></div>
+                    <div><span>Dispositivo</span><strong>{selectedJob.device_used || "Pendiente"}</strong></div>
+                    <div><span>RTF</span><strong>{selectedJob.real_time_factor?.toFixed(3) || "—"}</strong></div>
+                    <div><span>Progreso</span><strong>{selectedJob.progress}%</strong></div>
+                  </div>
+
+                  {["READY_FOR_REVIEW", "APPROVED"].includes(selectedJob.status) ? (
+                    <>
+                      {selectedJobRecording ? (
+                        <>
+                          <div className="timeline-card">
+                            <div className="timeline-head">
+                              <strong>
+                                {selectedJob.offset_start_seconds > 0 ||
+                                selectedJob.offset_end_seconds < selectedJobRecording.duration_seconds - 0.05
+                                  ? "Fragmento analizado"
+                                  : "Grabación completa"}
+                              </strong>
+                              <span>
+                                {formatDuration(
+                                  selectedJob.offset_end_seconds - selectedJob.offset_start_seconds,
+                                )}
+                              </span>
+                            </div>
+                            <div className="media-facts">
+                              <span>Original {formatDuration(selectedJobRecording.duration_seconds)}</span>
+                              <span>
+                                Desde {formatDuration(selectedJob.offset_start_seconds)} hasta {formatDuration(selectedJob.offset_end_seconds)}
+                              </span>
+                              <span>La vista comienza en 00:00</span>
+                            </div>
+                          </div>
+
+                          <ClippedVideoPlayer
+                            src={`${API}/api/recordings/${selectedJobRecording.id}/stream`}
+                            clipStart={selectedJob.offset_start_seconds}
+                            clipEnd={selectedJob.offset_end_seconds}
+                            originalDuration={selectedJobRecording.duration_seconds}
+                            seekToRelativeSeconds={resultSeekSeconds}
+                            onSeekApplied={() => setResultSeekSeconds(null)}
+                          />
+
+                          <div className="timeline-card">
+                            <div className="timeline-head">
+                              <strong>Intervalos sin transcripción detectada</strong>
+                              <span>{deadTimeIntervals.length}</span>
+                            </div>
+
+                            <p className="muted">
+                              Se muestran huecos de 5 segundos o más. Si aparece un hueco largo anormal,
+                              el backend lo verifica una vez sin diarización antes de mostrarlo.
+                            </p>
+
+                            {deadTimeAnalysisMeta.reliable === false && (
+                              <div className="notice warning">
+                                Se ocultaron {deadTimeAnalysisMeta.suppressed_interval_count || 0} intervalo(s)
+                                largo(s) no confirmado(s). Revisa el JSON para la auditoría técnica.
+                              </div>
+                            )}
+
+                            {deadTimeIntervals.length > 0 ? (
+                              <div className="job-list">
+                                {deadTimeIntervals.map((interval, index) => {
+                                  const relativeStart =
+                                    interval.relative_start_seconds ?? interval.start_seconds;
+                                  const relativeEnd =
+                                    interval.relative_end_seconds ?? interval.end_seconds;
+                                  const relativeStartLabel =
+                                    formatPreciseTime(relativeStart);
+                                  const relativeEndLabel =
+                                    formatPreciseTime(relativeEnd);
+                                  const sourceStart =
+                                    interval.source_start_seconds;
+                                  const sourceEnd =
+                                    interval.source_end_seconds;
+
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="job"
+                                      key={`${interval.start_seconds}-${interval.end_seconds}-${index}`}
+                                      onClick={() => seekToDeadTime(relativeStart)}
+                                    >
+                                      <div>
+                                        <strong>
+                                          {relativeStartLabel} – {relativeEndLabel}
+                                        </strong>
+                                        <span>
+                                          Duración: {interval.duration_seconds.toFixed(3)} s
+                                          {interval.level ? ` · ${interval.level}` : ""}
+                                        </span>
+                                        {sourceStart !== undefined && sourceEnd !== undefined && (
+                                          <span>
+                                            Video original: {formatPreciseTime(sourceStart)} – {formatPreciseTime(sourceEnd)}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <b>Reproducir</b>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="notice">No se confirmaron intervalos de 5 segundos o más.</div>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="notice warning">
+                          No se encontró la grabación asociada al trabajo. Actualiza los datos e inténtalo nuevamente.
+                        </div>
+                      )}
+
+                      <textarea
+                        className="transcript"
+                        value={reviewText}
+                        onChange={(event) => setReviewText(event.target.value)}
+                        placeholder="Cargando texto..."
+                      />
+                      <div className="inline-actions">
+                        <button className="outline" onClick={() => saveReview(false)} disabled={busy}>
+                          Guardar revisión
+                        </button>
+                        <button className="primary" onClick={() => saveReview(true)} disabled={busy}>
+                          Aprobar
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="processing">
+                      <div className="spinner" />
+                      <strong>{statusLabel[selectedJob.status] || selectedJob.status}</strong>
+                      <p>Los workers continúan aunque cierres el navegador.</p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="empty">Selecciona un trabajo para ver su resultado.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+<footer className="statusbar"><span className="status-dot" />{message}</footer>
       </section>
     </main>
   );
