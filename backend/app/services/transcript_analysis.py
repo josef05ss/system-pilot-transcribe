@@ -117,7 +117,8 @@ def _merge_intervals(
     return [(start, end) for start, end in merged]
 
 
-def build_speech_gap_analysis(
+
+def build_segment_coverage_analysis(
     segments: Iterable[Any],
     *,
     interval_duration_seconds: float,
@@ -127,11 +128,11 @@ def build_speech_gap_analysis(
     ),
 ) -> dict[str, Any]:
     """
-    Calcula intervalos sin palabras reconocidas usando los timestamps
-    de los segmentos.
+    Mide la cobertura temporal de los segmentos devueltos por el proveedor.
 
-    Esta métrica NO afirma que exista silencio acústico. Durante un hueco
-    puede haber ruido, música, voz demasiado baja o habla no reconocida.
+    No representa tiempo real de voz ni tiempo hablado por una persona.
+    Un segmento largo puede contener pausas internas. Para analizar esas
+    pausas se utiliza `dead_time_analysis`, basado en timestamps de palabras.
     """
     duration = max(0.0, _safe_float(interval_duration_seconds))
     minimum_gap = max(0.0, _safe_float(minimum_gap_seconds))
@@ -139,33 +140,33 @@ def build_speech_gap_analysis(
         segments,
         interval_duration_seconds=duration,
     )
-    speech_intervals = _merge_intervals(
+    segment_intervals = _merge_intervals(
         ((item["start"], item["end"]) for item in normalised),
         tolerance_seconds=max(0.0, merge_tolerance_seconds),
     )
 
-    all_gaps: list[tuple[float, float]] = []
+    all_uncovered: list[tuple[float, float]] = []
     cursor = 0.0
 
-    for start, end in speech_intervals:
+    for start, end in segment_intervals:
         if start > cursor:
-            all_gaps.append((cursor, start))
+            all_uncovered.append((cursor, start))
         cursor = max(cursor, end)
 
     if duration > cursor:
-        all_gaps.append((cursor, duration))
+        all_uncovered.append((cursor, duration))
 
-    reported_gaps: list[dict[str, Any]] = []
-    reported_gap_seconds = 0.0
+    reported_uncovered: list[dict[str, Any]] = []
+    reported_uncovered_seconds = 0.0
     all_uncovered_seconds = 0.0
-    ignored_short_gap_seconds = 0.0
+    ignored_short_uncovered_seconds = 0.0
 
-    for start, end in all_gaps:
-        gap_duration = max(0.0, end - start)
-        all_uncovered_seconds += gap_duration
+    for start, end in all_uncovered:
+        uncovered_duration = max(0.0, end - start)
+        all_uncovered_seconds += uncovered_duration
 
-        if gap_duration + 1e-9 < minimum_gap:
-            ignored_short_gap_seconds += gap_duration
+        if uncovered_duration + 1e-9 < minimum_gap:
+            ignored_short_uncovered_seconds += uncovered_duration
             continue
 
         if duration > 0 and start <= merge_tolerance_seconds and end >= (
@@ -179,79 +180,113 @@ def build_speech_gap_analysis(
         else:
             classification = "INTERNAL"
 
-        reported_gap_seconds += gap_duration
-        reported_gaps.append(
+        reported_uncovered_seconds += uncovered_duration
+        reported_uncovered.append(
             {
                 "start_seconds": _round(start),
                 "end_seconds": _round(end),
-                "duration_seconds": _round(gap_duration),
+                "duration_seconds": _round(uncovered_duration),
                 "classification": classification,
             }
         )
 
-    transcribed_speech_seconds = sum(
-        end - start for start, end in speech_intervals
+    segment_covered_seconds = sum(
+        end - start for start, end in segment_intervals
     )
-    longest_gap = max(
+    segment_covered_percentage = (
+        segment_covered_seconds / duration * 100.0
+        if duration > 0
+        else 0.0
+    )
+    all_uncovered_percentage = (
+        all_uncovered_seconds / duration * 100.0
+        if duration > 0
+        else 0.0
+    )
+    reported_uncovered_percentage = (
+        reported_uncovered_seconds / duration * 100.0
+        if duration > 0
+        else 0.0
+    )
+
+    longest_uncovered = max(
         (
             item["duration_seconds"]
-            for item in reported_gaps
+            for item in reported_uncovered
         ),
         default=0.0,
     )
-
-    initial_gap = next(
+    initial_uncovered = next(
         (
             item["duration_seconds"]
-            for item in reported_gaps
+            for item in reported_uncovered
             if item["classification"] in {"INITIAL", "WHOLE_INTERVAL"}
         ),
         0.0,
     )
-    final_gap = next(
+    final_uncovered = next(
         (
             item["duration_seconds"]
-            for item in reversed(reported_gaps)
+            for item in reversed(reported_uncovered)
             if item["classification"] in {"FINAL", "WHOLE_INTERVAL"}
         ),
         0.0,
     )
 
-    percentage = (
-        (reported_gap_seconds / duration) * 100
-        if duration > 0
-        else 0.0
-    )
-    all_uncovered_percentage = (
-        (all_uncovered_seconds / duration) * 100
-        if duration > 0
-        else 0.0
-    )
-
     return {
+        "analysis_source": "segment_timestamps",
         "definition": (
-            "Intervalos en los que el modelo no generó palabras ni "
-            "segmentos transcritos."
+            "Cobertura temporal de los segmentos devueltos por el proveedor "
+            "y huecos no cubiertos entre esos segmentos."
         ),
         "interpretation_warning": (
-            "No equivale necesariamente a silencio acústico: puede existir "
-            "ruido, música, voz baja o habla no reconocida."
+            "No representa tiempo real de voz ni tiempo hablado por el "
+            "docente. Un segmento puede abarcar pausas internas. Para "
+            "intervalos sin palabras reconocidas utiliza dead_time_analysis."
         ),
-        "minimum_gap_seconds": _round(minimum_gap),
+        "minimum_uncovered_seconds": _round(minimum_gap),
         "interval_duration_seconds": _round(duration),
-        "transcribed_speech_seconds": _round(transcribed_speech_seconds),
+        "segment_covered_seconds": _round(segment_covered_seconds),
+        "segment_covered_percentage": _round(segment_covered_percentage),
         "all_uncovered_seconds": _round(all_uncovered_seconds),
         "all_uncovered_percentage": _round(all_uncovered_percentage),
-        "total_gap_seconds": _round(reported_gap_seconds),
-        "gap_percentage": _round(percentage),
-        "gap_count": len(reported_gaps),
-        "longest_gap_seconds": _round(longest_gap),
-        "initial_gap_seconds": _round(initial_gap),
-        "final_gap_seconds": _round(final_gap),
-        "ignored_short_gap_seconds": _round(ignored_short_gap_seconds),
-        "intervals": reported_gaps,
+        "reported_uncovered_seconds": _round(
+            reported_uncovered_seconds
+        ),
+        "reported_uncovered_percentage": _round(
+            reported_uncovered_percentage
+        ),
+        "reported_uncovered_count": len(reported_uncovered),
+        "longest_uncovered_seconds": _round(longest_uncovered),
+        "initial_uncovered_seconds": _round(initial_uncovered),
+        "final_uncovered_seconds": _round(final_uncovered),
+        "ignored_short_uncovered_seconds": _round(
+            ignored_short_uncovered_seconds
+        ),
+        "intervals": reported_uncovered,
     }
 
+
+def build_speech_gap_analysis(
+    segments: Iterable[Any],
+    *,
+    interval_duration_seconds: float,
+    minimum_gap_seconds: float = DEFAULT_MINIMUM_GAP_SECONDS,
+    merge_tolerance_seconds: float = (
+        DEFAULT_INTERVAL_MERGE_TOLERANCE_SECONDS
+    ),
+) -> dict[str, Any]:
+    """
+    Alias temporal por compatibilidad con posibles imports antiguos.
+
+    Los reportes nuevos deben usar `segment_coverage_analysis`.
+    """
+    return build_segment_coverage_analysis(
+        segments,
+        interval_duration_seconds=interval_duration_seconds,
+        minimum_gap_seconds=minimum_gap_seconds,
+        merge_tolerance_seconds=merge_tolerance_seconds,
+    )
 
 
 def _seconds_to_clock(value: float) -> str:
@@ -780,7 +815,7 @@ def build_transcript_analysis(
 ) -> dict[str, Any]:
     materialised_segments = list(segments)
     return {
-        "speech_gap_analysis": build_speech_gap_analysis(
+        "segment_coverage_analysis": build_segment_coverage_analysis(
             materialised_segments,
             interval_duration_seconds=interval_duration_seconds,
             minimum_gap_seconds=minimum_gap_seconds,
@@ -790,4 +825,3 @@ def build_transcript_analysis(
             interval_duration_seconds=interval_duration_seconds,
         ),
     }
-

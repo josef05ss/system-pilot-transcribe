@@ -3,6 +3,7 @@
 import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import ClippedVideoPlayer from "./components/ClippedVideoPlayer";
+import VisionTestPanel from "./components/VisionTestPanel";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -42,7 +43,7 @@ type DeadTimeAnalysisMeta = {
 };
 type SystemInfo = { configured_device: string; configured_model: string; transcription_provider: "local" | "together"; together_ready: boolean; cuda_devices: number; gpus: Array<{ index: number; name: string; memory_mb: number; utilization_percent: number }> };
 
-type View = "transcribe" | "settings" | "jobs";
+type View = "transcribe" | "vision" | "settings" | "jobs";
 type ConfigTab = "sites" | "classrooms" | "cameras" | "assignments" | "professors" | "courses" | "schedules";
 
 const emptyCatalogs: Catalogs = { sites: [], classrooms: [], cameras: [], assignments: [], professors: [], courses: [], schedules: [] };
@@ -329,6 +330,7 @@ export default function Dashboard() {
         <nav>
           <button className={view === "transcribe" ? "active" : ""} onClick={() => setView("transcribe")}>Nueva transcripción</button>
           <button className={view === "jobs" ? "active" : ""} onClick={() => setView("jobs")}>Cola y resultados</button>
+          <button className={view === "vision" ? "active" : ""} onClick={() => setView("vision")}>OCR / Tareas</button>
           <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>Configuración CRUD</button>
         </nav>
         <div className="provider-card">
@@ -340,7 +342,7 @@ export default function Dashboard() {
 
       <section className="workspace">
         <header className="topbar">
-          <div><p className="eyebrow">SISTEMA REAL DE TRANSCRIPCIÓN</p><h1>{view === "transcribe" ? "Preparar y transcribir una clase" : view === "jobs" ? "Cola de procesamiento" : "Modelado y configuración"}</h1></div>
+          <div><p className="eyebrow">SISTEMA REAL DE TRANSCRIPCIÓN</p><h1>{view === "transcribe" ? "Preparar y transcribir una clase" : view === "jobs" ? "Cola de procesamiento" : view === "vision" ? "OCR de tareas y documentos" : "Modelado y configuración"}</h1></div>
           <button className="outline" onClick={loadAll}>Actualizar datos</button>
         </header>
 
@@ -388,6 +390,11 @@ export default function Dashboard() {
               </>}
             </form>
           </div>
+        )}
+
+
+        {view === "vision" && (
+          <VisionTestPanel />
         )}
 
         {view === "settings" && (

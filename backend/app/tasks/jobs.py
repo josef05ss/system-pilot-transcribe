@@ -552,16 +552,6 @@ def transcribe_job(self, job_id: str) -> dict:
                 provider_model = result.get(
                     "provider_model"
                 )
-                request_id = result.get("provider_request_id")
-                if request_id:
-                    provider_request_ids.append(str(request_id))
-                provider_duration = result.get(
-                    "provider_duration_seconds"
-                )
-                if provider_duration is not None:
-                    provider_duration_seconds.append(
-                        float(provider_duration)
-                    )
                 current_text = result["text"]
 
                 clean_current = (

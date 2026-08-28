@@ -179,8 +179,8 @@ def enriched_metrics(
         job,
         job.recording,
     )
-    metrics["speech_gap_analysis"] = add_timeline_to_analysis(
-        analysis["speech_gap_analysis"],
+    metrics["segment_coverage_analysis"] = add_timeline_to_analysis(
+        analysis["segment_coverage_analysis"],
         source_offset_seconds=source_offset,
     )
     metrics["speaker_analysis"] = analysis["speaker_analysis"]
@@ -506,14 +506,14 @@ def download_job(
             dead_time_analysis,
             source_offset_seconds=source_offset,
         )
-        speech_gap_analysis = add_timeline_to_analysis(
-            analysis["speech_gap_analysis"],
+        segment_coverage_analysis = add_timeline_to_analysis(
+            analysis["segment_coverage_analysis"],
             source_offset_seconds=source_offset,
         )
         metrics["selected_interval"] = selected_interval
 
         payload = {
-            "report_version": "2.2",
+            "report_version": "2.3",
             "job_id": job.id,
             "status": job.status,
             "provider": job.provider_name,
@@ -525,7 +525,7 @@ def download_job(
             "metrics": metrics,
             "dead_time_analysis": dead_time_analysis,
             "quality": metrics.get("transcription_quality", {}),
-            "speech_gap_analysis": speech_gap_analysis,
+            "segment_coverage_analysis": segment_coverage_analysis,
             "speaker_analysis": analysis["speaker_analysis"],
             "segments": [
                 {
