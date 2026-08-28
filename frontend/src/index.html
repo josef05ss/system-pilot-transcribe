@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OCR Pipeline — Transcripción de imágenes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="scan-grid" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="brand__mark">OCR</span>
+      <span class="brand__name">pipeline<span class="cursor">_</span></span>
+    </div>
+    <div class="topbar__status" id="apiStatus">
+      <span class="dot" id="apiDot"></span>
+      <span id="apiStatusText">verificando backend…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel intake">
+      <h1 class="intake__title">Sube una imagen o un documento</h1>
+      <p class="intake__subtitle">
+        PNG / JPG / JPEG individuales, o documentos PDF / DOCX / PPTX / XLSX
+        (se extraen automáticamente solo las imágenes que contienen).
+      </p>
+
+      <label class="dropzone" id="dropzone" for="fileInput">
+        <input type="file" id="fileInput"
+               accept=".png,.jpg,.jpeg,.bmp,.tiff,.tif,.pdf,.docx,.pptx,.xlsx" hidden />
+        <div class="dropzone__scanline" id="scanline"></div>
+        <div class="dropzone__content" id="dropzoneContent">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 3v12m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <p class="dropzone__label">Arrastra un archivo aquí o haz clic para elegirlo</p>
+          <p class="dropzone__hint" id="dropzoneHint">esperando archivo…</p>
+        </div>
+      </label>
+
+      <div class="pipeline-trace" id="pipelineTrace">
+        <div class="trace__step" data-step="upload">01 · recepción</div>
+        <div class="trace__step" data-step="extract">02 · extracción</div>
+        <div class="trace__step" data-step="preprocess">03 · preprocesamiento</div>
+        <div class="trace__step" data-step="route">04 · ocr router</div>
+        <div class="trace__step" data-step="engine">05 · motor ocr</div>
+        <div class="trace__step" data-step="store">06 · postgresql</div>
+      </div>
+    </section>
+
+    <section class="panel results">
+      <div class="results__header">
+        <h2>Documentos procesados</h2>
+        <button class="btn-ghost" id="refreshBtn">↻ actualizar</button>
+      </div>
+      <div class="results__list" id="resultsList">
+        <p class="empty-state">Todavía no hay documentos procesados.</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="detail-overlay" id="detailOverlay">
+    <div class="detail-card">
+      <button class="detail-card__close" id="closeDetail">✕</button>
+      <h3 id="detailTitle">Documento</h3>
+      <div id="detailBody"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

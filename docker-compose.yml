@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ocr_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ocr_user
+      POSTGRES_PASSWORD: ocr_password
+      POSTGRES_DB: ocr_db
+    volumes:
+      - ocr_pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocr_user -d ocr_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: ocr_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://ocr_user:ocr_password@db:5432/ocr_db
+      TESSERACT_LANG: spa+eng
+      OCR_MIN_CONFIDENCE: "80"
+      COLOR_SATURATION_THRESHOLD: "12"
+      MIN_EXTRACTED_IMAGE_SIZE: "60"
+      TROCR_MODEL_NAME: microsoft/trocr-base-handwritten
+      CORS_ORIGINS: "*"
+      # Motor de respaldo en la nube (opcional). Se lee desde el archivo
+      # .env en esta misma carpeta — ver .env.example. Si lo dejas vacío,
+      # el pipeline sigue funcionando 100% local (Tesseract + TrOCR).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      VISION_API_CONFIDENCE: "95"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ocr_uploads:/app/uploads
+      - ocr_model_cache:/app/model_cache
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    container_name: ocr_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  ocr_pg_data:
+  ocr_uploads:
+  ocr_model_cache:

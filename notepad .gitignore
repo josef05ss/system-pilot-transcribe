@@ -1,0 +1,38 @@
+# Entornos virtuales
+.venv/
+.venv-trocr/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Variables de entorno
+.env
+.env.*
+!.env.example
+
+# Hugging Face
+.cache/
+.cache/huggingface/
+huggingface/
+models/
+*.safetensors
+*.bin
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporales
+tmp/
+temp/
