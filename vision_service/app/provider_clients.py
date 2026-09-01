@@ -338,11 +338,28 @@ async def _auto_transcribe(
         warnings.append("LOW_ENGINE_AGREEMENT")
     selected["warnings"] = warnings
 
+    # El worker Qwen v6 devuelve confianza por token; si el propio modelo
+    # duda, el docente debe revisar aunque los motores coincidan.
+    qwen_confidence = qwen_result.get("average_confidence")
+    qwen_warnings = qwen_result.get("warnings") or []
+    needs_review = bool(
+        agreement < 0.35
+        or "LOW_CONFIDENCE_PAGE" in qwen_warnings
+        or "EXCESSIVE_REPETITION" in qwen_warnings
+        or "OUTPUT_TRUNCATED" in qwen_warnings
+    )
+
+    if needs_review and "NEEDS_HUMAN_REVIEW" not in warnings:
+        selected["warnings"].append("NEEDS_HUMAN_REVIEW")
+
     selected.setdefault("metadata", {})
     selected["metadata"]["auto"] = {
         "selected_provider": winner,
         "reason": reason,
         "agreement_score": round(agreement, 4),
+        "needs_review": needs_review,
+        "qwen_average_confidence": qwen_confidence,
+        "qwen_warnings": qwen_warnings,
         "paddle_structurally_clean": paddle_clean,
         "paddle_model": paddle_result.get("model", "PaddleOCR"),
         "qwen_model": qwen_result.get("model"),

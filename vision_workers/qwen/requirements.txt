@@ -5,3 +5,9 @@ pillow>=10,<13
 transformers>=5.0,<6
 accelerate>=1.0,<2
 safetensors>=0.5
+numpy>=1.26
+
+# Enderezado, deteccion de renglones y recorte de cromo usan numpy.
+# bitsandbytes solo hace falta para QWEN_LOAD_IN_4BIT=true (modelos 8B
+# en GPUs de 12 GB). En produccion con GPU grande no es necesario.
+bitsandbytes>=0.45; platform_system != "Darwin"

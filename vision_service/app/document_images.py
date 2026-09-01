@@ -87,6 +87,80 @@ def extract_pdf_images(
     return results
 
 
+def extract_pdf_native_text(file_bytes: bytes) -> list[dict]:
+    """
+    Texto ya presente en el PDF, sin pasar por OCR.
+
+    Un PDF exportado desde Word o Google Docs lleva el texto real dentro.
+    Transcribirlo por OCR sería introducir errores donde no los hay: la capa
+    nativa es exacta por definición. Solo se recurre a la visión para lo que
+    de verdad es una imagen.
+    """
+    import fitz
+
+    document = fitz.open(stream=file_bytes, filetype="pdf")
+    pages: list[dict] = []
+
+    try:
+        for index in range(document.page_count):
+            text = document.load_page(index).get_text().strip()
+            if text:
+                pages.append(
+                    {
+                        "page": index + 1,
+                        "characters": len(text),
+                        "text": text,
+                    }
+                )
+    finally:
+        document.close()
+
+    return pages
+
+
+def render_pdf_pages(
+    file_bytes: bytes,
+    dpi: int = 200,
+    max_pages: int = 20,
+) -> list[dict]:
+    """
+    Renderiza páginas completas como imagen.
+
+    Reserva para el PDF que no trae ni texto nativo ni imágenes incrustadas
+    utilizables: por ejemplo un escaneo vectorizado, o una página donde la
+    tarea está dibujada en lugar de insertada como foto.
+    """
+    import fitz
+
+    document = fitz.open(stream=file_bytes, filetype="pdf")
+    results: list[dict] = []
+    zoom = dpi / 72.0
+
+    try:
+        for index in range(min(document.page_count, max_pages)):
+            pixmap = document.load_page(index).get_pixmap(
+                matrix=fitz.Matrix(zoom, zoom)
+            )
+            results.append(
+                {
+                    "image_number": index + 1,
+                    "source": "pdf_rendered_page",
+                    "page": index + 1,
+                    "sheet": None,
+                    "cell": None,
+                    "media_name": f"page_{index + 1}",
+                    "extension": ".png",
+                    "width": pixmap.width,
+                    "height": pixmap.height,
+                    "bytes": pixmap.tobytes("png"),
+                }
+            )
+    finally:
+        document.close()
+
+    return results
+
+
 def extract_docx_images(
     file_bytes: bytes,
     min_width: int,

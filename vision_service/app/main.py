@@ -12,6 +12,8 @@ from app.benchmark_metrics import evaluate_text
 from app.document_images import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
     extract_document_images,
+    extract_pdf_native_text,
+    render_pdf_pages,
 )
 from app.provider_clients import (
     BENCHMARK_PROVIDERS,
@@ -425,12 +427,55 @@ async def transcribe_document_images(
             detail=f"No se pudieron extraer las imágenes: {exc}",
         ) from exc
 
+    # El texto que el PDF ya trae es exacto: pasarlo por OCR solo añade
+    # errores. Se transcribe con visión únicamente lo que es imagen.
+    native_pages: list[dict] = []
+    rendered_fallback = False
+
+    if extension == ".pdf":
+        try:
+            native_pages = extract_pdf_native_text(data)
+        except Exception:
+            native_pages = []
+
+        # Ni texto ni imágenes: la página en sí es el documento.
+        if not native_pages and not extracted:
+            try:
+                extracted = render_pdf_pages(data)
+                rendered_fallback = True
+            except Exception:
+                extracted = []
+
     results, consolidated = await _transcribe_extracted_images(
         provider,
         extracted,
     )
 
+    if native_pages:
+        native_block = "\n\n".join(
+            f"Página {item['page']} (texto del documento):\n{item['text']}"
+            for item in native_pages
+        )
+        consolidated = (
+            f"{native_block}\n\n{consolidated}"
+            if consolidated
+            else native_block
+        )
+
     warnings = []
+
+    if native_pages:
+        warnings.append(
+            f"{len(native_pages)} página(s) traían texto propio "
+            f"({sum(item['characters'] for item in native_pages)} caracteres). "
+            "Ese texto se tomó tal cual, sin OCR, porque ya es exacto."
+        )
+
+    if rendered_fallback:
+        warnings.append(
+            "El PDF no traía texto ni imágenes incrustadas: se renderizaron "
+            "las páginas completas para poder transcribirlas."
+        )
 
     if extension == ".docx":
         warnings.append(
@@ -438,7 +483,7 @@ async def transcribe_document_images(
             "la página visual exacta depende del renderizado de Word."
         )
 
-    if not extracted:
+    if not extracted and not native_pages:
         warnings.append(
             "No se encontraron imágenes incrustadas que cumplan "
             "el tamaño mínimo configurado."
@@ -461,6 +506,11 @@ async def transcribe_document_images(
         "filename": filename,
         "images_found": len(extracted),
         "images_processed": len(results),
+        "native_text_pages": len(native_pages),
+        "native_text_characters": sum(
+            item["characters"] for item in native_pages
+        ),
+        "rendered_pages_fallback": rendered_fallback,
         "processing_seconds": round(
             time.perf_counter() - started,
             4,
